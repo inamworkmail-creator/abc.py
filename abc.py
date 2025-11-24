@@ -4,7 +4,6 @@ from ultralytics import YOLO
 import cv2
 import numpy as np
 from gtts import gTTS
-from playsound import playsound
 import os
 
 import time
@@ -184,3 +183,4 @@ else:
         frame_window.image(annotated_frame)
 
     camera.release()
+
