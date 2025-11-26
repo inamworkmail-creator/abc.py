@@ -1,186 +1,87 @@
-
 import streamlit as st
-from ultralytics import YOLO
 import cv2
-import numpy as np
+import tempfile
+from ultralytics import YOLO
 from gtts import gTTS
+from playsound import playsound
 import os
-
 import time
-from typing import Optional
 
-# Popup configuration
-POPUP_DURATION = 2.0  # seconds to display the transient popup
+st.set_page_config(page_title="Live YOLO Detection with Voice", layout="wide")
 
-def speak(text):
-    """Converts text to speech and plays it."""
-    try:
-        tts = gTTS(text=text, lang='en')
-        # Use a temporary file for the audio
-        audio_file = "temp_audio.mp3"
-        tts.save(audio_file)
-        playsound(audio_file)
-        os.remove(audio_file)
-    except Exception as e:
-        st.error(f"Error in TTS: {e}")
+# ---------------------------
+# Load YOLO model
+# ---------------------------
+MODEL_PATH = "C:/Users/User/Documents/all/sajid/best (1).pt"   # your trained model
+model = YOLO(MODEL_PATH)
 
-def show_detection_popup(label: str, conf: float, severity: str = 'warning') -> None:
-    """Record a detection in session state so the UI can show a transient popup.
+# Flag to avoid repeated speaking
+last_spoken = ""
+speak_delay = 3   # seconds
+last_speak_time = 0
 
-    severity: 'warning'|'info' - determines whether the UI shows a warning or info popup.
-    Also records a `pending_tts` text that can be consumed by a later text-to-speech step.
-    """
-    now = time.time()
-    st.session_state['last_detection'] = {
-        'label': label,
-        'conf': conf,
-        'time': now,
-        'severity': severity,
-    }
+# ---------------------------
+# Function: Speak detected object
+# ---------------------------
+def speak_object(label):
+    global last_spoken, last_speak_time
     
-    # Cooldown to avoid speaking too often for the same object
-    COOLDOWN_SECONDS = 5.0
+    # avoid repeated speech
+    if label == last_spoken and (time.time() - last_speak_time < speak_delay):
+        return
     
-    last_spoken_time = st.session_state.get('last_spoken_time', 0.0)
-    last_spoken_label = st.session_state.get('last_spoken_label')
+    last_spoken = label
+    last_speak_time = time.time()
 
-    if label != last_spoken_label or (now - last_spoken_time) > COOLDOWN_SECONDS:
-        tts_text = f"{label} is prohibited, please collect"
-        st.session_state['pending_tts'] = tts_text
-        speak(tts_text)
-        st.session_state['last_spoken_label'] = label
-        st.session_state['last_spoken_time'] = now
+    tts = gTTS(text=f"Prohibited item detected: {label}", lang="en")
 
+    # Create safe temporary audio file
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as tmp_file:
+        audio_path = tmp_file.name
 
-# Ensure session state key exists
-if 'last_detection' not in st.session_state:
-    st.session_state['last_detection'] = None
-if 'pending_tts' not in st.session_state:
-    st.session_state['pending_tts'] = None
-if 'last_spoken_label' not in st.session_state:
-    st.session_state['last_spoken_label'] = None
-if 'last_spoken_time' not in st.session_state:
-    st.session_state['last_spoken_time'] = 0.0
-if 'collected_items' not in st.session_state:
-    st.session_state['collected_items'] = []
-if 'session_ended' not in st.session_state:
-    st.session_state['session_ended'] = False
-if 'collecting_item' not in st.session_state:
-    st.session_state['collecting_item'] = None
+    tts.save(audio_path)
+    playsound(audio_path)
+    os.remove(audio_path)
 
-import collections
+# ---------------------------
+# Streamlit UI
+# ---------------------------
+st.title("🔴 Live Object Detection with Voice Alert (YOLO)")
 
-# Load your YOLO model
-model = YOLO("best (1).pt")
+run_cam = st.checkbox("Start Camera")
 
-st.title("Exam Classroom Scanner")
+frame_window = st.image([])
 
-if st.button("End Exam Scan"):
-    st.session_state.session_ended = True
+# ---------------------------
+# Camera Loop
+# ---------------------------
+if run_cam:
+    cam = cv2.VideoCapture(0)
 
-if st.session_state.session_ended:
-    st.header("Collected Items Report")
-    if not st.session_state.collected_items:
-        st.write("No prohibited items were collected during the scan.")
-    else:
-        item_counts = collections.Counter(item['label'] for item in st.session_state.collected_items)
-        st.table(item_counts)
-else:
-    st.write("This application uses a YOLO model to scan for prohibited items in an exam setting.")
-
-    # Placeholders
-    spoken_text_placeholder = st.empty()
-    collect_button_placeholder = st.empty()
-    collection_status_placeholder = st.empty()
-
-    # Handle collection timer and status
-    if st.session_state.collecting_item:
-        collection_start_time = st.session_state.collecting_item['collection_start_time']
-        elapsed_time = time.time() - collection_start_time
-        if elapsed_time < 5:
-            collection_status_placeholder.info(f"Collecting {st.session_state.collecting_item['label']}... {5 - int(elapsed_time)}s remaining")
-        else:
-            st.session_state.collected_items.append(st.session_state.collecting_item)
-            collection_status_placeholder.success(f"Collected {st.session_state.collecting_item['label']}!")
-            st.session_state.collecting_item = None
-            st.session_state.last_detection = None # Clear last detection to hide collect button
-            collection_status_placeholder.empty()
-            st.experimental_rerun()
-
-    # Start/Stop checkbox
-    run = st.checkbox("Start Camera")
-
-    # Placeholder with dummy image
-    frame_window = st.image(np.zeros((480, 640, 3), dtype=np.uint8), caption="Live Camera Detection")
-
-    # Render transient popup if a recent detection was recorded
-    last = st.session_state.get('last_detection')
-    if last is not None and (time.time() - last.get('time', 0.0)) < POPUP_DURATION:
-        if last.get('severity', 'info') == 'warning':
-            st.warning(f"Detected: {last['label']} ({last['conf']:.2f})", icon="⚠️")
-        else:
-            st.info(f"Detected: {last['label']} ({last['conf']:.2f})", icon="📣")
-
-    # Initialize webcam
-    camera = cv2.VideoCapture(0)
-
-    while run:
-        success, frame = camera.read()
-        if not success:
-            st.write("Failed to access webcam.")
+    while True:
+        ret, frame = cam.read()
+        if not ret:
+            st.warning("Camera not found.")
             break
 
-        # Update spoken text display
-        if st.session_state.get('pending_tts'):
-            spoken_text_placeholder.write(f"Speaking: {st.session_state['pending_tts']}")
+        # YOLO Detection
+        results = model(frame)[0]
 
-        # Run YOLO prediction
-        results = model.predict(frame, conf=0.5)
+        # Draw boxes
+        for box in results.boxes:
+            x1, y1, x2, y2 = box.xyxy[0].tolist()
+            cls = int(box.cls[0])
+            label = model.names[cls]
 
-        # Plot detections
-        annotated_frame = results[0].plot()
+            # speak detected item
+            speak_object(label)
 
-        # If there are detections, extract the first label+confidence and show popup
-        try:
-            boxes = results[0].boxes
-            if boxes is not None and len(boxes) > 0:
-                # Attempt robust extraction of class and confidence
-                try:
-                    cls_list = boxes.cls.cpu().numpy().astype(int).tolist()
-                    conf_list = boxes.conf.cpu().numpy().tolist()
-                except Exception:
-                    try:
-                        cls_list = boxes.cls.numpy().astype(int).tolist()
-                        conf_list = boxes.conf.numpy().tolist()
-                    except Exception:
-                        cls_list = [int(x) for x in boxes.cls]
-                        conf_list = [float(x) for x in boxes.conf]
+            # draw rectangle
+            cv2.rectangle(frame, (int(x1), int(y1)), (int(x2), int(y2)), (0, 0, 255), 2)
+            cv2.putText(frame, f"{label}", (int(x1), int(y1)-10),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
 
-                cls0 = cls_list[0]
-                conf0 = conf_list[0]
-                label = model.names.get(cls0, str(cls0)) if hasattr(model, 'names') else str(cls0)
-                # This will update st.session_state.last_detection
-                show_detection_popup(label, conf0, severity='warning')
+        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        frame_window.image(frame)
 
-                # Display collect button if an item is detected
-                if not st.session_state.collecting_item:
-                    if collect_button_placeholder.button(f"Collect {label}"):
-                        st.session_state.collecting_item = {
-                            'label': label,
-                            'collection_start_time': time.time()
-                        }
-                        collect_button_placeholder.empty()
-                        st.experimental_rerun()
-
-        except Exception:
-            # Non-fatal: if extraction fails, silently continue
-            pass
-
-        # Convert BGR to RGB
-        annotated_frame = cv2.cvtColor(annotated_frame, cv2.COLOR_BGR2RGB)
-
-        # Update streamlit window
-        frame_window.image(annotated_frame)
-
-    camera.release()
-
+    cam.release()
